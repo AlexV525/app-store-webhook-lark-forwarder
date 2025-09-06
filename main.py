@@ -1,3 +1,5 @@
+from typing import Optional
+
 import base64
 import hashlib
 import hmac
@@ -53,9 +55,9 @@ def send_lark_notification(webhook_url: str, secret: str, card_payload: dict):
     except requests.exceptions.RequestException as e:
         print(f"发送到飞书/Lark时发生网络错误: {e}")
 
-def format_lark_card(title: str, content: str) -> dict:
+def format_lark_card(title: str, content: str, raw: Optional[str]) -> dict:
     """构造一个标准的飞书/Lark卡片消息结构"""
-    return {
+    result = {
         "msg_type": "interactive",
         "card": {
             "header": {
@@ -75,6 +77,12 @@ def format_lark_card(title: str, content: str) -> dict:
             ]
         }
     }
+    if raw:
+        result["card"]["elements"].append({
+            "tag": "markdown",
+            "content": f"```\n{raw}\n```"
+        })
+    return result
 
 
 def verify_apple_signature(request):
@@ -105,12 +113,12 @@ def verify_apple_signature(request):
 
     return hmac.compare_digest(received_signature, calculated_signature)
 
-def parse_apple_notification(data: dict) -> (str, str):
+def parse_apple_notification(data: dict) -> (str, str, str):
     """解析 Apple 的通知数据，返回标题和内容，并附带原始 JSON"""
-    try:
-        # 总是先准备好要附加的原始 JSON 代码块
-        raw_json_block = f"\n\n**原始数据 (Raw JSON):**\n```json\n{json.dumps(data, indent=2, ensure_ascii=False)}\n```"
+    # 总是先准备好要附加的原始 JSON 代码块
+    raw_json_block = json.dumps(data, indent=2, ensure_ascii=False)
 
+    try:
         event_data = data.get('data', {})
         attributes = event_data.get('attributes', {})
         relationships = event_data.get('relationships', {})
@@ -144,16 +152,14 @@ def parse_apple_notification(data: dict) -> (str, str):
             lines.append(f"类型: `{notification_type}`")
             lines.append("请登录 App Store Connect 查看详情。")
 
-        # 将摘要信息和原始 JSON 块组合起来
-        content = "\n".join(lines) + raw_json_block
+        # 将摘要信息组合起来
+        content = "\n".join(lines)
 
-        return title, content
+        return title, content, raw_json_block
 
     except Exception as e:
         print(f"解析通知时出错: {e}")
-        # 如果解析出错，仅返回错误标题和原始 JSON
-        error_content = f"```json\n{json.dumps(data, indent=2, ensure_ascii=False)}\n```"
-        return "⚠️ 通知解析错误", error_content
+        return "⚠️ 通知解析错误", f"{e}", raw_json_block
 
 # --- Cloud Function 主入口 ---
 
@@ -173,8 +179,8 @@ def webhook_handler(request):
     except Exception as e:
         return f'无效的 JSON: {e}', 400
 
-    title, content = parse_apple_notification(data)
-    card_payload = format_lark_card(title, content)
+    title, content, raw = parse_apple_notification(data)
+    card_payload = format_lark_card(title, content, raw)
 
     send_lark_notification(LARK_WEBHOOK_URL, LARK_SIGNING_SECRET, card_payload)
 
@@ -196,6 +202,6 @@ if __name__ == "__main__":
     if not cli_webhook_url:
         raise ValueError("错误: 必须在环境变量中设置 LARK_WEBHOOK_URL。")
 
-    message_payload = format_lark_card(args.title, args.content)
+    message_payload = format_lark_card(args.title, args.content, None)
     send_lark_notification(cli_webhook_url, cli_signing_secret, message_payload)
 
