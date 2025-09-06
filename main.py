@@ -106,8 +106,11 @@ def verify_apple_signature(request):
     return hmac.compare_digest(received_signature, calculated_signature)
 
 def parse_apple_notification(data: dict) -> (str, str):
-    """解析 Apple 的通知数据，返回标题和内容"""
+    """解析 Apple 的通知数据，返回标题和内容，并附带原始 JSON"""
     try:
+        # 总是先准备好要附加的原始 JSON 代码块
+        raw_json_block = f"\n\n**原始数据 (Raw JSON):**\n```json\n{json.dumps(data, indent=2, ensure_ascii=False)}\n```"
+
         event_data = data.get('data', {})
         attributes = event_data.get('attributes', {})
         relationships = event_data.get('relationships', {})
@@ -119,6 +122,7 @@ def parse_apple_notification(data: dict) -> (str, str):
         title = f"📱 {app_name} ({version})" if version else f"📱 {app_name}"
         lines = []
 
+        # 生成人类可读的摘要信息
         if notification_type == 'APP_STORE_VERSION_STATE_UPDATED':
             old_state = attributes.get('oldState', 'N/A')
             new_state = attributes.get('newState', 'N/A')
@@ -140,11 +144,16 @@ def parse_apple_notification(data: dict) -> (str, str):
             lines.append(f"类型: `{notification_type}`")
             lines.append("请登录 App Store Connect 查看详情。")
 
-        return title, "\n".join(lines)
+        # 将摘要信息和原始 JSON 块组合起来
+        content = "\n".join(lines) + raw_json_block
+
+        return title, content
 
     except Exception as e:
         print(f"解析通知时出错: {e}")
-        return "⚠️ 通知解析错误", f"```json\n{json.dumps(data, indent=2)}\n```"
+        # 如果解析出错，仅返回错误标题和原始 JSON
+        error_content = f"```json\n{json.dumps(data, indent=2, ensure_ascii=False)}\n```"
+        return "⚠️ 通知解析错误", error_content
 
 # --- Cloud Function 主入口 ---
 
