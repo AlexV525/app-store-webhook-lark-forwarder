@@ -56,4 +56,4 @@ jobs:
       run: |
         python main.py \
           --title "🚀 部署成功通知" \
-          --content "App Store Webhook 函数已成功部署。\n**最新 URL:** ${{ steps.deploy.outputs.url }}"
+          --content "App Store Webhook 函数已成功部署。**最新 URL:** ${{ steps.deploy.outputs.url }}"
