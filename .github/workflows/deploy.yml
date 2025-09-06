@@ -3,41 +3,57 @@ name: Deploy to Google Cloud Functions
 on:
   push:
     branches:
-      - main
+      - main # 当 main 分支有更新时触发
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
       contents: 'read'
-      id-token: 'write'
+      id-token: 'write' # 必须添加此权限，用于 OIDC 认证
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Authenticate to Google Cloud
-        id: auth
-        uses: 'google-github-actions/auth@v2'
-        with:
-          project_id: '${{ secrets.GCP_PROJECT_ID }}'
-          workload_identity_provider: '${{ secrets.WIF_PROVIDER }}'
-          service_account: '${{ secrets.GCP_SA_EMAIL }}'
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
 
-      - name: 'Set up Cloud SDK'
-        uses: 'google-github-actions/setup-gcloud@v2'
+    - name: Install dependencies
+      run: pip install requests
 
-      - id: 'deploy'
-        uses: 'google-github-actions/deploy-cloud-functions@v4'
-        timeout-minutes: 10
-        with:
-          project_id: '${{ secrets.GCP_PROJECT_ID }}'
-          name: 'app-store-webhook-forwarder'
-          region: 'us-central1'
-          runtime: 'python312'
-          entry_point: 'webhook_handler'
-          environment: 'GEN_2'
-          environment_variables: |-
-            LARK_WEBHOOK_URL=${{ secrets.LARK_WEBHOOK_URL }}
-            LARK_SIGNING_SECRET=${{ secrets.LARK_SIGNING_SECRET }}
-            APP_STORE_CONNECT_SECRET=${{ secrets.APP_STORE_CONNECT_SECRET }}
+    - name: Authenticate to Google Cloud
+      id: auth
+      uses: 'google-github-actions/auth@v2'
+      with:
+        project_id: '${{ secrets.GCP_PROJECT_ID }}'
+        workload_identity_provider: '${{ secrets.WIF_PROVIDER }}'
+        service_account: '${{ secrets.GCP_SA_EMAIL }}'
+
+    - name: Deploy Function
+      id: 'deploy'
+      uses: 'google-github-actions/deploy-cloud-functions@v4'
+      timeout-minutes: 10
+      with:
+        project_id: '${{ secrets.GCP_PROJECT_ID }}'
+        name: 'app-store-webhook-forwarder'
+        region: 'us-central1' # 您可以根据需要修改区域
+        runtime: 'python312' # 您可以根据需要修改 Python 版本
+        entry_point: 'webhook_handler'
+        environment: 'GEN_2'
+        environment_variables: |-
+          LARK_WEBHOOK_URL=${{ secrets.LARK_WEBHOOK_URL }}
+          LARK_SIGNING_SECRET=${{ secrets.LARK_SIGNING_SECRET }}
+          APP_STORE_CONNECT_SECRET=${{ secrets.APP_STORE_CONNECT_SECRET }}
+
+    - name: Send Private Notification to Lark
+      if: success() && steps.deploy.outputs.url
+      env:
+        LARK_WEBHOOK_URL: ${{ secrets.LARK_WEBHOOK_URL }}
+        LARK_SIGNING_SECRET: ${{ secrets.LARK_SIGNING_SECRET }}
+      run: |
+        python main.py \
+          --title "🚀 部署成功通知" \
+          --content "App Store Webhook 函数已成功部署。\n**最新 URL:** ${{ steps.deploy.outputs.url }}"
