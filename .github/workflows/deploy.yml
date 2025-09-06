@@ -30,6 +30,7 @@ jobs:
         uses: 'google-github-actions/deploy-cloud-functions@v4'
         timeout-minutes: 10
         with:
+          project_id: '${{ secrets.GCP_PROJECT_ID }}'
           name: 'app-store-webhook-forwarder'
           region: 'us-central1'
           runtime: 'python312'
