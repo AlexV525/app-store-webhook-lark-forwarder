@@ -93,48 +93,18 @@ gcloud functions deploy app-store-webhook-forwarder \
 
 1. 打开您的 GitHub 仓库页面，进入 **Settings** > **Secrets and variables** > **Actions**。
 2. 点击 **“New repository secret”** 按钮，依次添加以下四个 Secrets：
-    * GCP_SA_KEY: 将您在上一步获取的 **.json 密钥文件的全部内容**粘贴到这里。
-    * LARK_WEBHOOK_URL: 您的飞书 / Lark 机器人 Webhook 地址。
-    * LARK_SIGNING_SECRET: （可选）您的飞书 / Lark 机器人签名密钥。
-    * APP_STORE_CONNECT_SECRET: 您为 App Store Connect Webhook 设定的共享密钥。
+   * GCP_PROJECT_ID: 您的 GCP 项目 ID。
+   * GCP_SA_EMAIL: 您创建的服务账号的完整邮箱地址。
+   * WIF_PROVIDER: 您的 Workload Identity Provider 路径。
+   * LARK_WEBHOOK_URL: 您的飞书 / Lark 机器人 Webhook 地址。
+   * LARK_SIGNING_SECRET: （可选）您的飞书 / Lark 机器人签名密钥。
+   * APP_STORE_CONNECT_SECRET: 您为 App Store Connect Webhook 设定的共享密钥。
 
 ### 第 3 步：创建 GitHub Action 工作流
 
 1. 在您的项目根目录下，创建一个 .github/workflows 文件夹。
 2. 在该文件夹中，创建一个名为 deploy.yml 的文件。
-3. 将以下内容粘贴到 deploy.yml 文件中：
-
-```yaml
-name: Deploy to Google Cloud Functions
-
-on:
-  push:
-    branches:
-      - main
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Authenticate to Google Cloud
-        uses: 'google-github-actions/auth@v1'
-        with:
-          credentials_json: '${{ secrets.GCP_SA_KEY }}' # 在 GitHub secrets 中配置 GCP 服务账号密钥
-
-      - name: Deploy Function
-        uses: 'google-github-actions/deploy-cloud-functions@v1'
-        with:
-          name: app-store-webhook-forwarder # 函数名称
-          runtime: python312
-          entry_point: webhook_handler
-          env_vars: |
-            LARK_WEBHOOK_URL=${{ secrets.LARK_WEBHOOK_URL }}
-            LARK_SIGNING_SECRET=${{ secrets.LARK_SIGNING_SECRET }}
-            APP_STORE_CONNECT_SECRET=${{ secrets.APP_STORE_CONNECT_SECRET }}
-```
+3. 参考已有的文件进行设置：[deploy.yaml](.github/workflows/deploy.yml)
 
 配置完成后，每当您向 main 分支推送代码时，
 GitHub Actions 就会自动将最新的代码部署到您的
