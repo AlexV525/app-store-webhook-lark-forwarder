@@ -23,7 +23,9 @@ jobs:
         python-version: '3.12'
 
     - name: Install dependencies
-      run: pip install requests
+      run: pip install -r requirements.txt
+
+    
 
     - name: Authenticate to Google Cloud
       id: auth
@@ -32,6 +34,7 @@ jobs:
         project_id: '${{ secrets.GCP_PROJECT_ID }}'
         workload_identity_provider: '${{ secrets.WIF_PROVIDER }}'
         service_account: '${{ secrets.GCP_SA_EMAIL }}'
+        service_timeout: '600s'
 
     - name: Deploy Function
       id: 'deploy'
@@ -48,6 +51,9 @@ jobs:
           LARK_WEBHOOK_URL=${{ secrets.LARK_WEBHOOK_URL }}
           LARK_SIGNING_SECRET=${{ secrets.LARK_SIGNING_SECRET }}
           APP_STORE_CONNECT_SECRET=${{ secrets.APP_STORE_CONNECT_SECRET }}
+          KEY_ID=${{ secrets.KEY_ID }}
+          ISSUER_ID=${{ secrets.ISSUER_ID }}
+          APPSTORE_PRIVATE_KEY=${{ secrets.APPSTORE_PRIVATE_KEY }}
 
     - name: Send Private Notification to Lark
       if: success() && steps.deploy.outputs.url

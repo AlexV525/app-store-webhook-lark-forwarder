@@ -8,6 +8,7 @@ import os
 import requests
 import time
 import argparse
+import jwt
 
 # --- 环境变量读取 ---
 # 用于接收 App Store 通知的 Webhook
@@ -15,6 +16,92 @@ LARK_WEBHOOK_URL = os.environ.get('LARK_WEBHOOK_URL')
 LARK_SIGNING_SECRET = os.environ.get('LARK_SIGNING_SECRET')
 # 用于接收 Apple Webhook 的密钥
 APP_STORE_CONNECT_SECRET = os.environ.get('APP_STORE_CONNECT_SECRET')
+# App Store Connect API 认证信息
+KEY_ID = os.environ.get('KEY_ID')
+ISSUER_ID = os.environ.get('ISSUER_ID')
+APPSTORE_PRIVATE_KEY = os.environ.get('APPSTORE_PRIVATE_KEY')
+
+# --- App Store Connect API ---
+
+def generate_asc_token(scope: list[str]) -> str:
+    """Generate the JWT for App Store Connect API authentication."""
+    # Ensure the private key is formatted correctly with actual newlines
+    private_key = APPSTORE_PRIVATE_KEY.replace('\n', '\n')
+    
+    payload = {
+        "iss": ISSUER_ID,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 10 * 60, # Token valid for 10 minutes
+        "aud": "appstoreconnect-v1",
+        "scope": scope
+    }
+    encoded_token = jwt.encode(
+        payload,
+        private_key,
+        algorithm="ES256",
+        headers={"kid": KEY_ID}
+    )
+    return encoded_token.decode('utf-8')
+
+def get_app_details_from_app_id(app_id: str) -> (Optional[str], Optional[str]):
+    """Get app details by making a manual API call from an app ID."""
+    scope = [f"GET /v1/apps/{app_id}"]
+    token = generate_asc_token(scope=scope)
+    headers = {'Authorization': f'Bearer {token}'}
+    url = f"https://api.appstoreconnect.apple.com/v1/apps/{app_id}"
+
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    data = response.json()['data']
+
+    app_name = data['attributes']['name']
+    icon_url = None
+    icon_token_data = data['attributes'].get('iconAssetToken')
+    if icon_token_data:
+        template_url = icon_token_data.get('templateUrl')
+        if template_url:
+            icon_url = template_url.format(w=100, h=100, f='png')
+    return app_name, icon_url
+
+def get_app_details_from_version_id(version_id: str) -> (Optional[str], Optional[str]):
+    """Get app details by making a manual API call from a version ID."""
+    scope = [f"GET /v1/appStoreVersions/{version_id}?include=app"]
+    token = generate_asc_token(scope=scope)
+    headers = {'Authorization': f'Bearer {token}'}
+    url = f"https://api.appstoreconnect.apple.com/v1/appStoreVersions/{version_id}?include=app"
+
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    data = response.json()
+
+    app_data = next((item for item in data.get('included', []) if item.get('type') == 'apps'), None)
+    if not app_data:
+        return None, None
+
+    app_name = app_data['attributes'].get("name")
+    icon_url = None
+    icon_token_data = app_data['attributes'].get('iconAssetToken')
+    if icon_token_data:
+        template_url = icon_token_data.get('templateUrl')
+        if template_url:
+            icon_url = template_url.format(w=100, h=100, f='png')
+    return app_name, icon_url
+
+def get_app_details(app_id: Optional[str] = None, version_id: Optional[str] = None) -> (Optional[str], Optional[str]):
+    """使用 App Store Connect API 获取应用名称和图标 URL"""
+    if not all([KEY_ID, ISSUER_ID, APPSTORE_PRIVATE_KEY]) or not (app_id or version_id):
+        print("缺少 App Store Connect API 凭证或 app_id/version_id。")
+        return None, None
+
+    try:
+        if version_id:
+            return get_app_details_from_version_id(version_id)
+        if app_id:
+            return get_app_details_from_app_id(app_id)
+
+    except Exception as e:
+        print(f"获取 App Store Connect API 数据时出错: {e}")
+        return None, None
 
 # --- 核心辅助函数 ---
 
@@ -55,43 +142,54 @@ def send_lark_notification(webhook_url: str, secret: str, card_payload: dict):
     except requests.exceptions.RequestException as e:
         print(f"发送到飞书/Lark时发生网络错误: {e}")
 
-def format_lark_card(title: str, content: str, raw: Optional[str]) -> dict:
+def format_lark_card(title: str, content: str, raw: Optional[str], icon_url: Optional[str]) -> dict:
     """构造一个标准的飞书/Lark卡片消息结构"""
-    result = {
+    elements = [
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": content
+            }
+        }
+    ]
+    if icon_url:
+        elements[0]["extra"] = {
+            "tag": "img",
+            "img_key": icon_url,
+            "alt": {
+                "tag": "plain_text",
+                "content": "应用图标"
+            }
+        }
+
+    if raw:
+        elements.append({
+            "tag": "markdown",
+            "content": f"```\n{raw}\n```"
+        })
+
+    return {
         "msg_type": "interactive",
         "card": {
             "header": {
                 "title": {
                     "tag": "plain_text",
                     "content": title
-                }
+                },
+                "template": "blue"
             },
-            "elements": [
-                {
-                    "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": content
-                    }
-                }
-            ]
+            "elements": elements
         }
     }
-    if raw:
-        result["card"]["elements"].append({
-            "tag": "markdown",
-            "content": f"```\n{raw}\n```"
-        })
-    return result
 
 
 def verify_apple_signature(request):
     """验证来自 App Store Connect 的请求签名"""
     signature_header = request.headers.get('X-Apple-Signature', '')
 
-    # 移除 'hmacsha256=' 前缀 (如果有)
     if '=' in signature_header:
-        algo, received_signature = signature_header.split('=', 1)
+        _, received_signature = signature_header.split('=', 1)
     else:
         received_signature = signature_header
 
@@ -107,33 +205,36 @@ def verify_apple_signature(request):
     hashed = hmac.new(
         APP_STORE_CONNECT_SECRET.encode('utf-8'),
         msg=request_body,
-        digestmod=hashlib.sha256
+        digestmod= hashlib.sha256
     )
     calculated_signature = hashed.hexdigest()
 
     return hmac.compare_digest(received_signature, calculated_signature)
 
-def parse_apple_notification(data: dict) -> (str, str, str):
+def parse_apple_notification(data: dict, app_name_override: Optional[str]) -> (str, str, str):
     """解析 Apple 的通知数据，返回标题和内容，并附带原始 JSON"""
-    # 总是先准备好要附加的原始 JSON 代码块
     raw_json_block = json.dumps(data, indent=2, ensure_ascii=False)
 
     try:
         event_data = data.get('data', {})
         attributes = event_data.get('attributes', {})
-        relationships = event_data.get('relationships', {})
-
+        
         notification_type = event_data.get('type', '未知类型')
-        app_name = relationships.get('app', {}).get('data', {}).get('attributes', {}).get('name', '未知应用')
         version = attributes.get('versionString', '')
 
+        app_name = app_name_override or '未知应用'
         title = f"📱 {app_name} ({version})" if version else f"📱 {app_name}"
         lines = []
 
-        # 生成人类可读的摘要信息
         if notification_type == 'APP_STORE_VERSION_STATE_UPDATED':
             old_state = attributes.get('oldState', 'N/A')
             new_state = attributes.get('newState', 'N/A')
+            lines.append(f"**应用版本状态更新**")
+            lines.append(f"旧状态: `{old_state}`")
+            lines.append(f"新状态: `{new_state}`")
+        elif notification_type == 'appStoreVersionAppVersionStateUpdated':
+            old_state = attributes.get('oldValue', 'N/A')
+            new_state = attributes.get('newValue', 'N/A')
             lines.append(f"**应用版本状态更新**")
             lines.append(f"旧状态: `{old_state}`")
             lines.append(f"新状态: `{new_state}`")
@@ -152,9 +253,7 @@ def parse_apple_notification(data: dict) -> (str, str, str):
             lines.append(f"类型: `{notification_type}`")
             lines.append("请登录 App Store Connect 查看详情。")
 
-        # 将摘要信息组合起来
         content = "\n".join(lines)
-
         return title, content, raw_json_block
 
     except Exception as e:
@@ -179,8 +278,24 @@ def webhook_handler(request):
     except Exception as e:
         return f'无效的 JSON: {e}', 400
 
-    title, content, raw = parse_apple_notification(data)
-    card_payload = format_lark_card(title, content, raw)
+    app_name = None
+    icon_url = None
+
+    event_data = data.get('data', {})
+
+    # Try to get app_id directly
+    app_id = event_data.get('relationships', {}).get('app', {}).get('data', {}).get('id')
+    version_id = None
+
+    # If direct app_id is not found, try to get version_id from the instance relationship
+    if not app_id:
+        version_id = event_data.get('relationships', {}).get('instance', {}).get('data', {}).get('id')
+
+    if app_id or version_id:
+        app_name, icon_url = get_app_details(app_id=app_id, version_id=version_id)
+
+    title, content, raw = parse_apple_notification(data, app_name)
+    card_payload = format_lark_card(title, content, raw, icon_url)
 
     send_lark_notification(LARK_WEBHOOK_URL, LARK_SIGNING_SECRET, card_payload)
 
@@ -195,13 +310,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # 从环境变量读取 Webhook URL 和密钥
     cli_webhook_url = os.environ.get('LARK_WEBHOOK_URL')
     cli_signing_secret = os.environ.get('LARK_SIGNING_SECRET')
 
     if not cli_webhook_url:
         raise ValueError("错误: 必须在环境变量中设置 LARK_WEBHOOK_URL。")
 
-    message_payload = format_lark_card(args.title, args.content, None)
+    message_payload = format_lark_card(args.title, args.content, None, None)
     send_lark_notification(cli_webhook_url, cli_signing_secret, message_payload)
-
